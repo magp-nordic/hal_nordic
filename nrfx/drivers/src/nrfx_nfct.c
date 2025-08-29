@@ -43,50 +43,51 @@
 
 #define FIELD_TIMER_FREQUENCY_HZ NRFX_MHZ_TO_HZ(1)
 
-#if !defined(USE_WORKAROUND_FOR_ANOMALY_79) &&          \
-    (defined(NRF52832_XXAA) || defined(NRF52832_XXAB))
-#define USE_WORKAROUND_FOR_ANOMALY_79 1
+#if defined(USE_WORKAROUND_FOR_ANOMALY_79)
+// Enable workaround for nRF52 Series anomaly 79
+// A false EVENTS_FIELDDETECTED event occurs after the field is lost.
+#undef NRF52_ERRATA_79_ENABLE_WORKAROUND
+#define NRF52_ERRATA_79_ENABLE_WORKAROUND USE_WORKAROUND_FOR_ANOMALY_79
 #endif
 
-#if !defined(USE_WORKAROUND_FOR_ANOMALY_190) &&          \
-    (defined(NRF52833_XXAA) || defined(NRF52840_XXAA) || \
-     defined(NRF5340_XXAA_APPLICATION))
-#define USE_WORKAROUND_FOR_ANOMALY_190 1
+#if defined(USE_WORKAROUND_FOR_ANOMALY_190)
+// Enable workaround for nRF52 Series anomaly 190
+// Event FIELDDETECTED may be generated too early.
+#undef NRF52_ERRATA_190_ENABLE_WORKAROUND
+#define NRF52_ERRATA_190_ENABLE_WORKAROUND USE_WORKAROUND_FOR_ANOMALY_190
 #endif
 
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_79) || NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
-#define NFCT_WORKAROUND_USES_TIMER 1
-#endif
-
-#if NRFX_CHECK(NFCT_WORKAROUND_USES_TIMER)
+#if NRF_ERRATA_STATIC_CHECK(52, 79) || NRF_ERRATA_STATIC_CHECK(52, 190) || \
+    NRF_ERRATA_STATIC_CHECK(53, 70)
 #include <nrfx_timer.h>
 
 typedef struct
 {
     const nrfx_timer_t timer;                     /**< Timer instance that supports the correct NFC field detection. */
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
+#if NRF_ERRATA_STATIC_CHECK(52, 190) || NRF_ERRATA_STATIC_CHECK(53, 70)
     bool               fieldevents_filter_active; /**< Flag that indicates that the field events are ignored. */
     bool               is_hfclk_on;               /**< HFCLK has started - one of the NFC activation conditions. */
     bool               is_delayed;                /**< Required time delay has passed - one of the NFC activation conditions. */
-#elif NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_79)
+#elif NRF_ERRATA_STATIC_CHECK(52, 79)
     uint32_t           field_state_cnt;           /**< Counter of the FIELDLOST events. */
-#endif // NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
+#endif
 } nrfx_nfct_timer_workaround_t;
 
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
+#if NRF_ERRATA_STATIC_CHECK(52, 190) || NRF_ERRATA_STATIC_CHECK(53, 70)
     #define NRFX_NFCT_ACTIVATE_DELAY     1000 /**< Minimal delay in us between NFC field detection and activation of NFCT. */
     #define NRFX_NFCT_TIMER_PERIOD       NRFX_NFCT_ACTIVATE_DELAY
-#elif NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_79)
+#elif  NRF_ERRATA_STATIC_CHECK(52, 79)
     #define NRFX_NFCT_FIELDLOST_THR      7
     #define NRFX_NFCT_FIELD_TIMER_PERIOD 100  /**< Field polling period in us. */
     #define NRFX_NFCT_TIMER_PERIOD       NRFX_NFCT_FIELD_TIMER_PERIOD
-#endif // NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
+#endif
 
 static nrfx_nfct_timer_workaround_t m_timer_workaround =
 {
     .timer = NRFX_TIMER_INSTANCE(NRFX_NFCT_CONFIG_TIMER_INSTANCE_ID),
 };
-#endif // NRFX_CHECK(NFCT_WORKAROUND_USES_TIMER)
+#endif // NRF_ERRATA_STATIC_CHECK(52, 79) || NRF_ERRATA_STATIC_CHECK(52, 190) ||
+       // NRF_ERRATA_STATIC_CHECK(53, 70)
 
 #define NFCT_FRAMEDELAYMAX_DEFAULT     (0x00001000UL) /**< Default value of the FRAMEDELAYMAX. */
 #define NFCT_FRAMEDELAYMIN_DEFAULT     (0x00000480UL) /**< Default value of the FRAMEDELAYMIN. */
@@ -156,14 +157,11 @@ static nrfx_nfct_control_block_t m_nfct_cb;
  */
 static void nfct_hw_init_setup(void)
 {
-    // Use Window Grid frame delay mode.
+    /* Use Window Grid frame delay mode. */
     nrfy_nfct_frame_delay_mode_set(NRF_NFCT, NRF_NFCT_FRAME_DELAY_MODE_WINDOWGRID);
-
-    /* Begin: Workaround for anomaly 25 */
-    /* Workaround for wrong SENSRES values require using SDD00001, but here SDD00100 is used
-       because it is required to operate with Windows Phone */
+    
+    /* Change the bit frame SDD to 00100 to improve interoperability. */
     nrfy_nfct_sensres_bit_frame_sdd_set(NRF_NFCT, NRF_NFCT_SENSRES_BIT_FRAME_SDD_00100);
-    /* End: Workaround for anomaly 25 */
 }
 
 static void nfct_frame_delay_max_set(bool default_delay)
@@ -208,12 +206,13 @@ static void nfct_field_event_handler(volatile nrfx_nfct_field_state_t field_stat
 {
     nrfx_nfct_evt_t nfct_evt;
 
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
-    if(m_timer_workaround.fieldevents_filter_active)
+#if NRF_ERRATA_STATIC_CHECK(52, 190) || NRF_ERRATA_STATIC_CHECK(53, 70)
+    if ((NRF_ERRATA_DYNAMIC_CHECK(52, 190) || NRF_ERRATA_DYNAMIC_CHECK(53, 70)) &&
+        m_timer_workaround.fieldevents_filter_active)
     {
         return;
     }
-#endif // NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
+#endif
 
     if (field_state == NRFX_NFC_FIELD_STATE_UNKNOWN)
     {
@@ -230,20 +229,24 @@ static void nfct_field_event_handler(volatile nrfx_nfct_field_state_t field_stat
         case NRFX_NFC_FIELD_STATE_ON:
             if (!m_nfct_cb.field_on)
             {
-#if NRFX_CHECK(NFCT_WORKAROUND_USES_TIMER)
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
-                m_timer_workaround.is_hfclk_on               = false;
-                m_timer_workaround.is_delayed                = false;
-                m_timer_workaround.fieldevents_filter_active = true;
+#if NRF_ERRATA_STATIC_CHECK(52, 190) || NRF_ERRATA_STATIC_CHECK(53, 70)
+                if (NRF_ERRATA_DYNAMIC_CHECK(52, 190) || NRF_ERRATA_DYNAMIC_CHECK(53, 70)) {
+                    m_timer_workaround.is_hfclk_on               = false;
+                    m_timer_workaround.is_delayed                = false;
+                    m_timer_workaround.fieldevents_filter_active = true;
 
-                nrfx_timer_clear(&m_timer_workaround.timer);
-                nrfx_timer_enable(&m_timer_workaround.timer);
-#elif NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_79)
-                nrfx_timer_clear(&m_timer_workaround.timer);
-                nrfx_timer_enable(&m_timer_workaround.timer);
-                m_timer_workaround.field_state_cnt = 0;
-#endif // NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
-#endif // NRFX_CHECK(NFCT_WORKAROUND_USES_TIMER)
+                    nrfx_timer_clear(&m_timer_workaround.timer);
+                    nrfx_timer_enable(&m_timer_workaround.timer);
+                }
+#endif
+#if NRF_ERRATA_STATIC_CHECK(52, 79)
+                if (NRF_ERRATA_DYNAMIC_CHECK(52, 79))
+                {
+                    nrfx_timer_clear(&m_timer_workaround.timer);
+                    nrfx_timer_enable(&m_timer_workaround.timer);
+                    m_timer_workaround.field_state_cnt = 0;
+                }
+#endif
 
                 m_nfct_cb.field_on = true;
                 nfct_evt.evt_id    = NRFX_NFCT_EVT_FIELD_DETECTED;
@@ -259,9 +262,10 @@ static void nfct_field_event_handler(volatile nrfx_nfct_field_state_t field_stat
                 m_nfct_cb.field_on = false;
                 nfct_evt.evt_id    = NRFX_NFCT_EVT_FIELD_LOST;
 
-                /* Begin: Workaround for anomaly 218 */
-                nfct_frame_delay_max_set(true);
-                /* End: Workaround for anomaly 218 */
+                if (NRF_ERRATA_DYNAMIC_CHECK(52, 218) || NRF_ERRATA_DYNAMIC_CHECK(53, 71))
+                {
+                    nfct_frame_delay_max_set(true);
+                }
 
                 NRFX_NFCT_CB_HANDLE(m_nfct_cb.config.cb, nfct_evt);
             }
@@ -273,8 +277,7 @@ static void nfct_field_event_handler(volatile nrfx_nfct_field_state_t field_stat
     }
 }
 
-#if NRFX_CHECK(NFCT_WORKAROUND_USES_TIMER)
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
+#if NRF_ERRATA_STATIC_CHECK(52, 190) || NRF_ERRATA_STATIC_CHECK(53, 70)
 static void nfct_activate_check(void)
 {
     static bool is_field_validation_pending = false;
@@ -299,10 +302,9 @@ static void nfct_activate_check(void)
         nrfx_timer_enable(&m_timer_workaround.timer);
     }
 }
-#endif // NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
+#endif
 
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_79)
-/* Begin: Workaround for anomaly 116 */
+#if NRF_ERRATA_STATIC_CHECK(52, 141)
 static inline void nfct_reset(void)
 {
     nrfy_nfct_parameters_t nfct_params;
@@ -329,8 +331,9 @@ static inline void nfct_reset(void)
 
     NRFX_LOG_INFO("Reinitialize");
 }
-/* End: Workaround for anomaly 116 */
+#endif
 
+#if NRF_ERRATA_STATIC_CHECK(52, 79)
 static void nfct_field_poll(void)
 {
     if (!nrfx_nfct_field_check())
@@ -347,10 +350,12 @@ static void nfct_field_poll(void)
 
             nfct_frame_delay_max_set(true);
 
-            /* Begin: Workaround for anomaly 116 */
-            /* resume the NFCT to initialized state */
-            nfct_reset();
-            /* End: Workaround for anomaly 116 */
+#if NRF_ERRATA_STATIC_CHECK(52, 141)
+            if (NRF_ERRATA_DYNAMIC_CHECK(52, 141))
+            {
+                nfct_reset();
+            }
+#endif
 
             NRFX_NFCT_CB_HANDLE(m_nfct_cb.config.cb, nfct_evt);
         }
@@ -359,8 +364,10 @@ static void nfct_field_poll(void)
 
     m_timer_workaround.field_state_cnt = 0;
 }
-#endif // NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_79)
+#endif
 
+#if NRF_ERRATA_STATIC_CHECK(52, 79) || NRF_ERRATA_STATIC_CHECK(52, 190) || \
+    NRF_ERRATA_STATIC_CHECK(53, 70)
 static void nfct_field_timer_handler(nrf_timer_event_t event_type, void * p_context)
 {
     (void)p_context;
@@ -370,14 +377,20 @@ static void nfct_field_timer_handler(nrf_timer_event_t event_type, void * p_cont
         return;
     }
 
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
-    m_timer_workaround.is_delayed = true;
-
-    nrfx_timer_disable(&m_timer_workaround.timer);
-    nfct_activate_check();
-#elif NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_79)
-    nfct_field_poll();
-#endif // NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
+#if NRF_ERRATA_STATIC_CHECK(52, 190) || NRF_ERRATA_STATIC_CHECK(53, 70)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 190) || NRF_ERRATA_DYNAMIC_CHECK(53, 70))
+    {
+        m_timer_workaround.is_delayed = true;
+        nrfx_timer_disable(&m_timer_workaround.timer);
+        nfct_activate_check();
+    }
+#endif
+#if NRF_ERRATA_STATIC_CHECK(52, 79)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 79))
+    {
+        nfct_field_poll();
+    }
+#endif
 }
 
 static inline nrfx_err_t nfct_field_timer_config(uint8_t irq_priority)
@@ -402,7 +415,8 @@ static inline nrfx_err_t nfct_field_timer_config(uint8_t irq_priority)
                                 true);
     return err_code;
 }
-#endif // NRFX_CHECK(NFCT_WORKAROUND_USES_TIMER)
+#endif // NRF_ERRATA_STATIC_CHECK(52, 79) || NRF_ERRATA_STATIC_CHECK(52, 190) ||
+       // NRF_ERRATA_STATIC_CHECK(53, 70)
 
 static inline
 nrf_nfct_sensres_nfcid1_size_t nfct_nfcid1_size_to_sensres_size(uint8_t nfcid1_size)
@@ -482,9 +496,13 @@ nrfx_err_t nrfx_nfct_init(nrfx_nfct_config_t const * p_config)
 
     nrfy_nfct_int_init(NRF_NFCT, p_config->rxtx_int_mask, p_config->irq_priority, false);
 
-#if NRFX_CHECK(NFCT_WORKAROUND_USES_TIMER)
-    /* Initialize Timer module as the workaround for NFCT HW issues. */
-    err_code = nfct_field_timer_config(p_config->irq_priority);
+#if NRF_ERRATA_STATIC_CHECK(52, 79) || NRF_ERRATA_STATIC_CHECK(52, 190) || \
+    NRF_ERRATA_STATIC_CHECK(53, 70)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 79) || NRF_ERRATA_DYNAMIC_CHECK(52, 190) ||
+        NRF_ERRATA_DYNAMIC_CHECK(53, 70))
+    {
+        err_code = nfct_field_timer_config(p_config->irq_priority);
+    }
 #endif
 
     m_nfct_cb.state           = NRFX_DRV_STATE_INITIALIZED;
@@ -502,9 +520,13 @@ void nrfx_nfct_uninit(void)
 
     nrfy_nfct_int_uninit(NRF_NFCT);
 
-#if NRFX_CHECK(NFCT_WORKAROUND_USES_TIMER)
-    /* De-initialize Timer module as the workaround for NFCT HW issues. */
-    nrfx_timer_uninit(&m_timer_workaround.timer);
+#if NRF_ERRATA_STATIC_CHECK(52, 79) || NRF_ERRATA_STATIC_CHECK(52, 190) || \
+    NRF_ERRATA_STATIC_CHECK(53, 70)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 79) || NRF_ERRATA_DYNAMIC_CHECK(52, 190) ||
+        NRF_ERRATA_DYNAMIC_CHECK(53, 70))
+    {
+        nrfx_timer_uninit(&m_timer_workaround.timer);
+    }
 #endif
 
     m_nfct_cb.state = NRFX_DRV_STATE_UNINITIALIZED;
@@ -526,7 +548,7 @@ void nrfx_nfct_enable(void)
     nrfy_nfct_int_enable(NRF_NFCT, NRF_NFCT_INT_FIELDDETECTED_MASK |
                                    NRF_NFCT_INT_ERROR_MASK         |
                                    NRF_NFCT_INT_SELECTED_MASK      |
-                                   (NRFX_IS_ENABLED(USE_WORKAROUND_FOR_ANOMALY_79) ?
+                                   (NRF_ERRATA_DYNAMIC_CHECK(52, 79) ?
                                     0 : NRF_NFCT_INT_FIELDLOST_MASK));
 
     NRFX_LOG_INFO("Start");
@@ -747,15 +769,16 @@ void nrfx_nfct_state_force(nrfx_nfct_state_t state)
 {
     NRFX_ASSERT(m_nfct_cb.state == NRFX_DRV_STATE_INITIALIZED);
 
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
-    if (state == NRFX_NFCT_STATE_ACTIVATED)
+#if NRF_ERRATA_STATIC_CHECK(52, 190) || NRF_ERRATA_STATIC_CHECK(53, 70)
+    if ((NRF_ERRATA_DYNAMIC_CHECK(52, 190) || NRF_ERRATA_DYNAMIC_CHECK(53, 70)) &&
+        (state == NRFX_NFCT_STATE_ACTIVATED))
     {
         m_timer_workaround.is_hfclk_on = true;
         /* NFCT will be activated based on additional conditions */
         nfct_activate_check();
         return;
     }
-#endif // NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_190)
+#endif
     nrfy_nfct_task_trigger(NRF_NFCT, (nrf_nfct_task_t) state);
 }
 
@@ -765,11 +788,11 @@ void nrfx_nfct_init_substate_force(nrfx_nfct_active_state_t sub_state)
 
     if (sub_state == NRFX_NFCT_ACTIVE_STATE_DEFAULT)
     {
-#if defined(NRF52832_XXAA) || defined(NRF52832_XXAB)
-        if (((*(uint32_t volatile *)(0x40005420)) & 0x1UL) == (1UL))
+#if defined(NFCT_SLEEPSTATE_SLEEPSTATE_Msk)
+        if (nrf_nfct_sleep_state_get(NRF_NFCT) == NRF_NFCT_SLEEP_STATE_SLEEP_A)
 #else
-        if (nrfy_nfct_sleep_state_get(NRF_NFCT) == NRF_NFCT_SLEEP_STATE_SLEEP_A)
-#endif //defined(NRF52832_XXAA) || defined(NRF52832_XXAB)
+        if (((*(uint32_t volatile *)(0x40005420)) & 0x1UL) == (1UL))
+#endif
         {
             // Default state is SLEEP_A
             nrfy_nfct_task_trigger(NRF_NFCT, NRF_NFCT_TASK_GOSLEEP);
@@ -900,14 +923,10 @@ nrfx_err_t nrfx_nfct_nfcid1_default_bytes_get(uint8_t * const p_nfcid1_buff,
             p_nfcid1_buff[8] = (uint8_t) (tag_header[2] >> 8);
             p_nfcid1_buff[9] = (uint8_t) (tag_header[2] >> 16);
         }
-        /* Begin: Workaround for anomaly 181. */
-        /* Workaround for wrong value in NFCID1. Value 0x88 cannot be used as byte 3
-           of a double-size NFCID1, according to the NFC Forum Digital Protocol specification. */
-        else if (p_nfcid1_buff[3] == 0x88)
+        else if (NRF_ERRATA_DYNAMIC_CHECK(52, 181) && (p_nfcid1_buff[3] == 0x88))
         {
             p_nfcid1_buff[3] |= 0x11;
         }
-        /* End: Workaround for anomaly 181 */
     }
 
     return NRFX_SUCCESS;
@@ -917,22 +936,22 @@ void nrfx_nfct_autocolres_enable(void)
 {
     NRFX_ASSERT(m_nfct_cb.state == NRFX_DRV_STATE_INITIALIZED);
 
-#if defined(NRF52832_XXAA) || defined(NRF52832_XXAB)
-    (*(uint32_t *)(0x4000559C)) &= (~(0x1UL));
+#if NRF_NFCT_HAS_AUTOCOLRES_CONFIG_REG
+    nrf_nfct_autocolres_enable(NRF_NFCT);
 #else
-    nrfy_nfct_autocolres_enable(NRF_NFCT);
-#endif //defined(NRF52832_XXAA) || defined(NRF52832_XXAB)
+    (*(uint32_t volatile *)(0x4000559C)) &= (~(0x1UL));
+#endif
 }
 
 void nrfx_nfct_autocolres_disable(void)
 {
     NRFX_ASSERT(m_nfct_cb.state == NRFX_DRV_STATE_INITIALIZED);
 
-#if defined(NRF52832_XXAA) || defined(NRF52832_XXAB)
-    (*(uint32_t *)(0x4000559C)) |= (0x1UL);
+#if NRF_NFCT_HAS_AUTOCOLRES_CONFIG_REG
+    nrf_nfct_autocolres_disable(NRF_NFCT);
 #else
-    nrfy_nfct_autocolres_disable(NRF_NFCT);
-#endif //defined(NRF52832_XXAA) || defined(NRF52832_XXAB)
+    (*(uint32_t volatile *)(0x4000559C)) |= (0x1UL);
+#endif
 }
 
 void nrfx_nfct_irq_handler(void)
@@ -940,7 +959,7 @@ void nrfx_nfct_irq_handler(void)
     nrfx_nfct_field_state_t current_field = NRFX_NFC_FIELD_STATE_NONE;
     uint32_t evt_mask = nrfy_nfct_events_process(NRF_NFCT,
                                         NRFY_EVENT_TO_INT_BITMASK(NRF_NFCT_EVENT_FIELDDETECTED)  |
-                                        (NRFX_IS_ENABLED(USE_WORKAROUND_FOR_ANOMALY_79) ? 0 :
+                                        (NRF_ERRATA_DYNAMIC_CHECK(52, 79) ? 0 :
                                             NRFY_EVENT_TO_INT_BITMASK(NRF_NFCT_EVENT_FIELDLOST)) |
                                         NRFY_EVENT_TO_INT_BITMASK(NRF_NFCT_EVENT_FIELDLOST)      |
                                         NRFY_EVENT_TO_INT_BITMASK(NRF_NFCT_EVENT_RXFRAMESTART)   |
@@ -958,15 +977,13 @@ void nrfx_nfct_irq_handler(void)
         NRFX_LOG_DEBUG("Field detected");
     }
 
-#if !NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_79)
-    if (NRFX_NFCT_EVT_ACTIVE(FIELDLOST, evt_mask))
+    if (!NRF_ERRATA_DYNAMIC_CHECK(52, 79) && NRFX_NFCT_EVT_ACTIVE(FIELDLOST, evt_mask))
     {
         current_field = (current_field == NRFX_NFC_FIELD_STATE_NONE) ?
                         NRFX_NFC_FIELD_STATE_OFF : NRFX_NFC_FIELD_STATE_UNKNOWN;
 
         NRFX_LOG_DEBUG("Field lost");
     }
-#endif //!NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_79)
 
     /* Perform actions if any FIELD event is active */
     if (current_field != NRFX_NFC_FIELD_STATE_NONE)

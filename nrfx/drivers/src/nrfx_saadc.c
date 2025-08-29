@@ -42,15 +42,28 @@
 #include <hal/nrf_ficr.h>
 #endif
 
-#if defined(NRF52_SERIES) && !defined(USE_WORKAROUND_FOR_ANOMALY_212)
-    // ANOMALY 212 - SAADC events are missing when switching from single channel
-    //               to multi channel configuration with burst enabled.
-    #define USE_WORKAROUND_FOR_ANOMALY_212 1
+#if defined(USE_WORKAROUND_FOR_ANOMALY_212)
+// Enable workaround for nRF52 Series anomaly 212
+// SAADC events are missing when switching from single channel
+// to multi channel configuration with burst enabled.
+#undef NRF52_ERRATA_212_ENABLE_WORKAROUND
+#define NRF52_ERRATA_212_ENABLE_WORKAROUND USE_WORKAROUND_FOR_ANOMALY_212
 #endif
 
-#if defined(NRF53_SERIES) || defined(NRF91_SERIES)
-    // Make sure that SAADC is stopped before channel configuration.
-    #define STOP_SAADC_ON_CHANNEL_CONFIG 1
+#if defined(STOP_SAADC_ON_CHANNEL_CONFIG)
+// Enable workaround for nRF91 Series anomaly 28
+// Missing events when switching from scan mode
+// to no-scan mode with burst enabled or TACQ < 10us.
+#undef NRF91_ERRATA_28_ENABLE_WORKAROUND
+#define NRF91_ERRATA_28_ENABLE_WORKAROUND STOP_SAADC_ON_CHANNEL_CONFIG
+#endif
+
+#if defined(STOP_SAADC_ON_CHANNEL_CONFIG)
+// Enable workaround for nRF53 Series anomaly 65
+// SAADC events are missing when switching from single channel
+// to multi channel configuration with burst disabled and TACQ < 10us.
+#undef NRF53_ERRATA_65_ENABLE_WORKAROUND
+#define NRF53_ERRATA_65_ENABLE_WORKAROUND STOP_SAADC_ON_CHANNEL_CONFIG
 #endif
 
 /** @brief Bitmask of all available SAADC channels. */
@@ -92,7 +105,6 @@ typedef struct
 
 static nrfx_saadc_cb_t m_cb;
 
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_212)
 static void saadc_anomaly_212_workaround_apply(void)
 {
     uint32_t c[SAADC_CH_NUM];
@@ -121,7 +133,6 @@ static void saadc_anomaly_212_workaround_apply(void)
     *(volatile uint32_t *)0x40007648 = u648;
     nrfy_saadc_resolution_set(NRF_SAADC, resolution);
 }
-#endif // NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_212)
 
 static nrfx_err_t saadc_channel_count_get(uint32_t  ch_to_activate_mask,
                                           uint8_t * p_active_ch_count)
@@ -203,14 +214,17 @@ static void saadc_generic_mode_set(uint32_t                   ch_to_activate_mas
                                    nrf_saadc_burst_t          burst,
                                    nrfx_saadc_event_handler_t event_handler)
 {
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_212)
-    saadc_anomaly_212_workaround_apply();
-#endif
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 212))
+    {
+        saadc_anomaly_212_workaround_apply();
+    }
 
-#if NRFX_CHECK(STOP_SAADC_ON_CHANNEL_CONFIG)
-    nrfy_saadc_int_disable(NRF_SAADC, NRF_SAADC_INT_STOPPED);
-    nrfy_saadc_stop(NRF_SAADC, true);
-#endif
+    if (NRF_ERRATA_DYNAMIC_CHECK(91, 28) ||
+        NRF_ERRATA_DYNAMIC_CHECK(53, 65))
+    {
+        nrfy_saadc_int_disable(NRF_SAADC, NRF_SAADC_INT_STOPPED);
+        nrfy_saadc_stop(NRF_SAADC, true);
+    }
 
     m_cb.limits_low_activated  = 0;
     m_cb.limits_high_activated = 0;

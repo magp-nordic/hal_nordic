@@ -140,19 +140,26 @@ static const uint8_t easydma_support_bits[] __UNUSED =
 #define SPIM_DEDICATED_PIN_VALIDATE(requested_pin, supported_pin) \
     (((requested_pin) == NRF_SPIM_PIN_NOT_CONNECTED) || ((requested_pin) == (supported_pin)))
 
-#if !defined(USE_WORKAROUND_FOR_ANOMALY_195) && \
-    defined(NRF52840_XXAA) && NRFX_CHECK(NRFX_SPIM3_ENABLED)
-// Enable workaround for nRF52840 anomaly 195 (SPIM3 continues to draw current after disable).
-#define USE_WORKAROUND_FOR_ANOMALY_195 1
+
+#if defined(NRFX_SPIM_NRF52_ANOMALY_109_WORKAROUND_ENABLED)
+// Enable workaround for nRF52 Series anomaly 109
+// DMA transfers might be corrupted.
+#undef NRF52_ERRATA_109_ENABLE_WORKAROUND
+#define NRF52_ERRATA_109_ENABLE_WORKAROUND NRFX_SPIM_NRF52_ANOMALY_109_WORKAROUND_ENABLED
 #endif
 
-#if NRFX_CHECK(NRF54L_ERRATA_8_ENABLE_WORKAROUND) || NRFX_CHECK(NRF54H_ERRATA_212_ENABLE_WORKAROUND)
-#define USE_WORKAROUND_FOR_ANOMALY_NRF54L_8_NRF54H_212 1
-static inline bool apply_errata_nrf54l_8_nrf54h_212(void)
-{
-    return (NRFX_COND_CODE_1(NRF54L_ERRATA_8_ENABLE_WORKAROUND, (nrf54l_errata_8()), (false)) ||
-            NRFX_COND_CODE_1(NRF54H_ERRATA_212_ENABLE_WORKAROUND, (nrf54h_errata_212()), (false)));
-}
+#if defined(USE_WORKAROUND_FOR_ANOMALY_195)
+// Enable workaround for nRF52 Series anomaly 195
+// SPIM3 continues to draw current after disable.
+#undef NRF52_ERRATA_195_ENABLE_WORKAROUND
+#define NRF52_ERRATA_195_ENABLE_WORKAROUND USE_WORKAROUND_FOR_ANOMALY_195
+#endif
+
+#if defined(NRFX_SPIM3_NRF52840_ANOMALY_198_WORKAROUND_ENABLED)
+// Enable workaround for nRF52 Series anomaly 198
+// SPIM3 transmit data might be corrupted.
+#undef NRF52_ERRATA_198_ENABLE_WORKAROUND
+#define NRF52_ERRATA_198_ENABLE_WORKAROUND NRFX_SPIM3_NRF52840_ANOMALY_198_WORKAROUND_ENABLED
 #endif
 
 // Control block - driver instance local data.
@@ -166,22 +173,18 @@ typedef struct
     bool                    skip_gpio_cfg          : 1;
     bool                    ss_active_high         : 1;
     bool                    disable_on_xfer_end    : 1;
-#ifdef USE_WORKAROUND_FOR_ANOMALY_NRF54L_8_NRF54H_212
+#if NRF_ERRATA_STATIC_CHECK(54L, 8) || NRF_ERRATA_STATIC_CHECK(54H, 212)
     bool                    apply_errata_8_212     : 1;
 #endif
-#if NRFX_CHECK(NRF54L_ERRATA_55_ENABLE_WORKAROUND)
+#if NRF_ERRATA_STATIC_CHECK(54L, 55)
     bool                    apply_errata_nrf54l_55 : 1;
 #endif
     uint32_t                ss_pin;
 } spim_control_block_t;
 static spim_control_block_t m_cb[NRFX_SPIM_ENABLED_COUNT];
 
-#if NRFX_CHECK(NRFX_SPIM3_NRF52840_ANOMALY_198_WORKAROUND_ENABLED)
-
-// Workaround for nRF52840 anomaly 198: SPIM3 transmit data might be corrupted.
-
+#if NRF_ERRATA_STATIC_CHECK(52, 198)
 static uint32_t m_anomaly_198_preserved_value;
-
 static void anomaly_198_enable(uint8_t const * p_buffer, size_t buf_len)
 {
     m_anomaly_198_preserved_value = *((volatile uint32_t *)0x40000E00);
@@ -215,7 +218,7 @@ static void anomaly_198_disable(void)
 {
     *((volatile uint32_t *)0x40000E00) = m_anomaly_198_preserved_value;
 }
-#endif // NRFX_CHECK(NRFX_SPIM3_NRF52840_ANOMALY_198_WORKAROUND_ENABLED)
+#endif // NRF_ERRATA_STATIC_CHECK(52, 198)
 
 static void spim_abort(NRF_SPIM_Type * p_spim, spim_control_block_t * p_cb)
 {
@@ -488,15 +491,15 @@ static void spim_configure(nrfx_spim_t const *        p_instance,
     uint32_t prescaler = spim_prescaler_calculate(p_instance, p_config->frequency);
 #endif
 
-#if NRFX_CHECK(NRF54L_ERRATA_55_ENABLE_WORKAROUND)
-    if (nrf54l_errata_55())
+#if NRF_ERRATA_STATIC_CHECK(54L, 55)
+    if (NRF_ERRATA_DYNAMIC_CHECK(54L, 55))
     {
         p_cb->apply_errata_nrf54l_55 = 1;
     }
 #endif
 
-#ifdef USE_WORKAROUND_FOR_ANOMALY_NRF54L_8_NRF54H_212
-    if (apply_errata_nrf54l_8_nrf54h_212())
+#if NRF_ERRATA_STATIC_CHECK(54L, 8) || NRF_ERRATA_STATIC_CHECK(54H, 212)
+    if (NRF_ERRATA_DYNAMIC_CHECK(54L, 8) || NRF_ERRATA_DYNAMIC_CHECK(54H, 212))
     {
         /* Workaround must be applied only if PRESCALER is larger than 2 and CPHA=0 */
         if ((prescaler > 2) &&
@@ -728,8 +731,8 @@ void nrfx_spim_uninit(nrfx_spim_t const * p_instance)
 #endif
     }
 
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_195)
-    if (p_instance->p_reg == NRF_SPIM3)
+#if NRFX_CHECK(NRFX_SPIM3_ENABLED)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 195) && (p_instance->p_reg == NRF_SPIM3))
     {
         *(volatile uint32_t *)0x4002F004 = 1;
     }
@@ -831,8 +834,8 @@ static nrfx_err_t spim_xfer(NRF_SPIM_Type               * p_spim,
         return err_code;
     }
 
-#if NRFX_CHECK(NRFX_SPIM3_NRF52840_ANOMALY_198_WORKAROUND_ENABLED)
-    if (p_spim == NRF_SPIM3)
+#if NRF_ERRATA_STATIC_CHECK(52, 198)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 198) && p_spim == NRF_SPIM3)
     {
         anomaly_198_enable(p_xfer_desc->p_tx_buffer, p_xfer_desc->tx_length);
     }
@@ -844,15 +847,13 @@ static nrfx_err_t spim_xfer(NRF_SPIM_Type               * p_spim,
 #endif
 
     nrfy_spim_xfer_desc_t xfer_desc = *p_xfer_desc;
-#if NRFX_CHECK(NRFX_SPIM_NRF52_ANOMALY_109_WORKAROUND_ENABLED)
-    if (flags & NRFX_SPIM_FLAG_HOLD_XFER)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 109) && (flags & NRFX_SPIM_FLAG_HOLD_XFER))
     {
         nrfy_spim_event_clear(p_spim, NRF_SPIM_EVENT_STARTED);
         xfer_desc.tx_length = 0;
         xfer_desc.rx_length = 0;
         nrfy_spim_int_enable(p_spim, NRF_SPIM_INT_STARTED_MASK);
     }
-#endif
     nrfy_spim_buffers_set(p_spim, &xfer_desc);
 
     nrfy_spim_event_clear(p_spim, NRF_SPIM_EVENT_END);
@@ -864,15 +865,15 @@ static nrfx_err_t spim_xfer(NRF_SPIM_Type               * p_spim,
 #endif
     nrfy_spim_enable(p_spim);
 
-#if NRFX_CHECK(NRF54L_ERRATA_55_ENABLE_WORKAROUND)
+#if NRF_ERRATA_STATIC_CHECK(54L, 55)
     if (p_cb->apply_errata_nrf54l_55)
     {
         *(volatile uint32_t *)((uint8_t *)p_spim + 0xc80) = 0x82;
     }
 #endif
 
-#ifdef USE_WORKAROUND_FOR_ANOMALY_NRF54L_8_NRF54H_212
-    if (apply_errata_nrf54l_8_nrf54h_212() && p_cb->apply_errata_8_212)
+#if NRF_ERRATA_STATIC_CHECK(54L, 8) || NRF_ERRATA_STATIC_CHECK(54H, 212)
+    if (p_cb->apply_errata_8_212)
     {
         *(volatile uint32_t *)((uint8_t *)p_spim + 0xc84) = 0x82;
         if (p_cb->handler)
@@ -890,22 +891,22 @@ static nrfx_err_t spim_xfer(NRF_SPIM_Type               * p_spim,
 
     if (!p_cb->handler)
     {
-#if NRFX_CHECK(NRF54L_ERRATA_55_ENABLE_WORKAROUND)
+#if NRF_ERRATA_STATIC_CHECK(54L, 55)
         if (p_cb->apply_errata_nrf54l_55)
         {
             *(volatile uint32_t *)((uint8_t *)p_spim + 0xc80) = 0;
         }
 #endif
 
-#ifdef USE_WORKAROUND_FOR_ANOMALY_NRF54L_8_NRF54H_212
-        if (apply_errata_nrf54l_8_nrf54h_212() && p_cb->apply_errata_8_212)
+#if NRF_ERRATA_STATIC_CHECK(54L, 8) || NRF_ERRATA_STATIC_CHECK(54H, 212)
+        if (p_cb->apply_errata_8_212)
         {
             *(volatile uint32_t *)((uint8_t *)p_spim + 0xc84) = 0;
         }
 #endif
 
-#if NRFX_CHECK(NRFX_SPIM3_NRF52840_ANOMALY_198_WORKAROUND_ENABLED)
-        if (p_spim == NRF_SPIM3)
+#if NRF_ERRATA_STATIC_CHECK(52, 198)
+        if (NRF_ERRATA_DYNAMIC_CHECK(52, 198) && (p_spim == NRF_SPIM3))
         {
             anomaly_198_disable();
         }
@@ -995,15 +996,15 @@ void nrfx_spim_abort(nrfx_spim_t const * p_instance)
 
 static void irq_handler(NRF_SPIM_Type * p_spim, spim_control_block_t * p_cb)
 {
-#if NRFX_CHECK(NRF54L_ERRATA_55_ENABLE_WORKAROUND)
+#if NRF_ERRATA_STATIC_CHECK(54L, 55)
     if (p_cb->apply_errata_nrf54l_55 && nrfy_spim_event_check(p_spim, NRF_SPIM_EVENT_END))
     {
         *(volatile uint32_t *)((uint8_t *)p_spim + 0xc80) = 0;
     }
 #endif
 
-#ifdef USE_WORKAROUND_FOR_ANOMALY_NRF54L_8_NRF54H_212
-    if (apply_errata_nrf54l_8_nrf54h_212() && p_cb->apply_errata_8_212)
+#if NRF_ERRATA_STATIC_CHECK(54L, 8) || NRF_ERRATA_STATIC_CHECK(54H, 212)
+    if (p_cb->apply_errata_8_212)
     {
         if (nrfy_spim_int_enable_check(p_spim, NRF_SPIM_INT_STARTED_MASK) &&
             nrfy_spim_event_check(p_spim, NRF_SPIM_EVENT_STARTED))
@@ -1015,8 +1016,8 @@ static void irq_handler(NRF_SPIM_Type * p_spim, spim_control_block_t * p_cb)
     }
 #endif
 
-#if NRFX_CHECK(NRFX_SPIM_NRF52_ANOMALY_109_WORKAROUND_ENABLED)
-    if (nrfy_spim_int_enable_check(p_spim, NRF_SPIM_INT_STARTED_MASK) &&
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 109) &&
+        nrfy_spim_int_enable_check(p_spim, NRF_SPIM_INT_STARTED_MASK) &&
         nrfy_spim_event_check(p_spim, NRF_SPIM_EVENT_STARTED))
     {
         /* Handle first, zero-length, auxiliary transmission. */
@@ -1034,14 +1035,13 @@ static void irq_handler(NRF_SPIM_Type * p_spim, spim_control_block_t * p_cb)
         nrfy_spim_xfer_start(p_spim, NULL);
         return;
     }
-#endif
 
     if (nrfy_spim_events_process(p_spim,
                                  NRFY_EVENT_TO_INT_BITMASK(NRF_SPIM_EVENT_END),
                                  &p_cb->evt.xfer_desc))
     {
-#if NRFX_CHECK(NRFX_SPIM3_NRF52840_ANOMALY_198_WORKAROUND_ENABLED)
-        if (p_spim == NRF_SPIM3)
+#if NRF_ERRATA_STATIC_CHECK(52, 198)
+        if (NRF_ERRATA_DYNAMIC_CHECK(52, 198) && p_spim == NRF_SPIM3)
         {
             anomaly_198_disable();
         }

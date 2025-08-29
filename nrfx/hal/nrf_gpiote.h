@@ -894,18 +894,6 @@ NRF_STATIC_INLINE nrf_gpiote_polarity_t nrf_gpiote_event_polarity_get(NRF_GPIOTE
 NRF_STATIC_INLINE void nrf_gpiote_task_enable(NRF_GPIOTE_Type * p_reg, uint32_t idx)
 {
     uint32_t final_config = p_reg->CONFIG[idx] | GPIOTE_CONFIG_MODE_Task;
-#ifdef NRF51
-    /* Workaround for the OUTINIT PAN. When nrf_gpiote_task_config() is called a glitch happens
-    on the GPIO if the GPIO in question is already assigned to GPIOTE and the pin is in the
-    correct state in GPIOTE, but not in the OUT register.
-    Configure channel to not existing, not connected to the pin,
-    and configure as a tasks that will set it to proper level */
-    p_reg->CONFIG[idx] = final_config |
-                         (((31) << GPIOTE_CONFIG_PSEL_Pos) & GPIOTE_CONFIG_PORT_PIN_Msk);
-    __NOP();
-    __NOP();
-    __NOP();
-#endif
     p_reg->CONFIG[idx] = final_config;
 }
 

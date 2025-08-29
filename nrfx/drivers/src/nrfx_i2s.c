@@ -47,24 +47,28 @@
     (event == NRF_I2S_EVENT_STOPPED  ? "NRF_I2S_EVENT_STOPPED"  : \
                                        "UNKNOWN EVENT")))
 
-#if !defined(USE_WORKAROUND_FOR_I2S_STOP_ANOMALY) && \
-    (defined(NRF52_SERIES) || defined(NRF91_SERIES))
-// Enable workaround for nRF52 Series anomaly 194 / nRF9160 anomaly 1
+#if defined(USE_WORKAROUND_FOR_I2S_STOP_ANOMALY)
+// Enable workaround for nRF52 Series anomaly 194 / nRF91 Series anomaly 1
 // (STOP task does not switch off all resources).
-#define USE_WORKAROUND_FOR_I2S_STOP_ANOMALY 1
+#undef NRF52_ERRATA_194_ENABLE_WORKAROUND
+#undef NRF91_ERRATA_1_ENABLE_WORKAROUND
+#define NRF52_ERRATA_194_ENABLE_WORKAROUND USE_WORKAROUND_FOR_I2S_STOP_ANOMALY
+#define NRF91_ERRATA_1_ENABLE_WORKAROUND   USE_WORKAROUND_FOR_I2S_STOP_ANOMALY
 #endif
 
-#if !defined(USE_WORKAROUND_FOR_ANOMALY_170) && defined(NRF52_SERIES)
+#if defined(USE_WORKAROUND_FOR_ANOMALY_170)
 // Enable workaround for nRF52 Series anomaly 170
 // (when reading the value of PSEL registers, the CONNECT field might not
 //  return the same value that has been written to it).
-#define USE_WORKAROUND_FOR_ANOMALY_170 1
+#undef NRF52_ERRATA_170_ENABLE_WORKAROUND
+#define NRF52_ERRATA_170_ENABLE_WORKAROUND USE_WORKAROUND_FOR_ANOMALY_170
 #endif
 
-#if !defined(USE_WORKAROUND_FOR_ANOMALY_196) && defined(NRF52_SERIES)
+#if defined(USE_WORKAROUND_FOR_ANOMALY_196)
 // Enable workaround for nRF52 Series anomaly 196
 // (PSEL acquires GPIO regardless of ENABLE).
-#define USE_WORKAROUND_FOR_ANOMALY_196 1
+#undef NRF52_ERRATA_196_ENABLE_WORKAROUND
+#define NRF52_ERRATA_196_ENABLE_WORKAROUND USE_WORKAROUND_FOR_ANOMALY_196
 #endif
 
 // Control block - driver instance local data.
@@ -140,19 +144,23 @@ static void configure_pins(nrfx_i2s_config_t const * p_config)
 static void deconfigure_pins(nrfx_i2s_t const * p_instance)
 {
     nrf_i2s_pins_t pins;
+    uint32_t pin_mask;
 
     nrfy_i2s_pins_get(p_instance->p_reg, &pins);
 
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_170)
-    // Create bitmask for extracting pin number from PSEL register.
-    uint32_t pin_mask = NRF_I2S_PSEL_SCK_PIN_MASK;
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 170))
+    {
+        // Create bitmask for extracting pin number from PSEL register.
+        pin_mask = NRF_I2S_PSEL_SCK_PIN_MASK;
 #if NRF_I2S_HAS_GPIO_PORT_SELECTION
-    // If device supports more than one GPIO port, take port number into account as well.
-    pin_mask |= NRF_I2S_PSEL_SCK_PORT_MASK;
+        // If device supports more than one GPIO port, take port number into account as well.
+        pin_mask |= NRF_I2S_PSEL_SCK_PORT_MASK;
 #endif
-#else
-    uint32_t pin_mask = 0xFFFFFFFF;
-#endif // USE_WORKAROUND_FOR_ANOMALY_170
+    }
+    else
+    {
+        pin_mask = 0xFFFFFFFF;
+    }
 
     nrfy_gpio_cfg_default(pins.sck_pin & pin_mask);
     nrfy_gpio_cfg_default(pins.lrck_pin & pin_mask);
@@ -314,8 +322,7 @@ void nrfx_i2s_uninit(nrfx_i2s_t const * p_instance)
         deconfigure_pins(p_instance);
     }
 
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_196)
-    if (!p_cb->skip_psel_cfg)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 196) && !p_cb->skip_psel_cfg)
     {
         // Disabling I2S is insufficient to release pins acquired by the peripheral.
         // Explicit disconnect is needed.
@@ -328,7 +335,6 @@ void nrfx_i2s_uninit(nrfx_i2s_t const * p_instance)
         };
         nrfy_i2s_pins_set(p_instance->p_reg, &pins);
     }
-#endif
 
     p_cb->state = NRFX_DRV_STATE_UNINITIALIZED;
     NRFX_LOG_INFO("Uninitialized.");
@@ -410,9 +416,12 @@ nrfx_err_t nrfx_i2s_start(nrfx_i2s_t const *         p_instance,
 
     p_cb->state = NRFX_DRV_STATE_POWERED_ON;
 
-    /* Clear spurious RXPTRUPD and TXPTRUPD events (see nRF52 anomaly 55). */
-    nrfy_i2s_event_clear(p_instance->p_reg, NRF_I2S_EVENT_RXPTRUPD);
-    nrfy_i2s_event_clear(p_instance->p_reg, NRF_I2S_EVENT_TXPTRUPD);
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 55))
+    {
+        /* Clear spurious RXPTRUPD and TXPTRUPD events */
+        nrfy_i2s_event_clear(p_instance->p_reg, NRF_I2S_EVENT_RXPTRUPD);
+        nrfy_i2s_event_clear(p_instance->p_reg, NRF_I2S_EVENT_TXPTRUPD);
+    }
 
     nrfy_i2s_int_enable(p_instance->p_reg,
                         (p_cb->use_rx ? NRF_I2S_INT_RXPTRUPD_MASK : 0UL) |
@@ -511,17 +520,22 @@ void nrfx_i2s_stop(nrfx_i2s_t const * p_instance)
 
     p_cb->buffers_needed = false;
 
-    // First disable interrupts, then trigger the STOP task, so no spurious
-    // RXPTRUPD and TXPTRUPD events (see nRF52 anomaly 55) are processed.
-    nrfy_i2s_int_disable(p_instance->p_reg, NRF_I2S_INT_RXPTRUPD_MASK |
-                                            NRF_I2S_INT_TXPTRUPD_MASK);
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 55))
+    {
+        // First disable interrupts, then trigger the STOP task, so no spurious
+        // RXPTRUPD and TXPTRUPD events are processed.
+        nrfy_i2s_int_disable(p_instance->p_reg, NRF_I2S_INT_RXPTRUPD_MASK |
+                                                NRF_I2S_INT_TXPTRUPD_MASK);
+    }
 
     nrfy_i2s_abort(p_instance->p_reg, NULL);
 
-#if NRFX_CHECK(USE_WORKAROUND_FOR_I2S_STOP_ANOMALY)
-    *((volatile uint32_t *)(((uint32_t)p_instance->p_reg) + 0x38)) = 1;
-    *((volatile uint32_t *)(((uint32_t)p_instance->p_reg) + 0x3C)) = 1;
-#endif
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 194) ||
+        NRF_ERRATA_DYNAMIC_CHECK(91, 1))
+    {
+        *((volatile uint32_t *)(((uint32_t)p_instance->p_reg) + 0x38)) = 1;
+        *((volatile uint32_t *)(((uint32_t)p_instance->p_reg) + 0x3C)) = 1;
+    }
 }
 
 static void irq_handler(NRF_I2S_Type * p_reg, nrfx_i2s_cb_t * p_cb)

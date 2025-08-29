@@ -684,15 +684,6 @@
 #endif
 
 /**
- * @brief NRFX_PRS_BOX_4_ENABLED
- *
- * Boolean. Accepted values: 0 and 1.
- */
-#ifndef NRFX_PRS_BOX_4_ENABLED
-#define NRFX_PRS_BOX_4_ENABLED 0
-#endif
-
-/**
  * @brief NRFX_RRAMC_ENABLED
  *
  * Boolean. Accepted values: 0 and 1.

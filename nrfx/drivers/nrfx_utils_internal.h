@@ -1747,4 +1747,14 @@ void NRFX_CONCAT(nrfx_, periph_name_small, _, prefix, i, _irq_handler)(void) \
     NRFX_DEBRACKET sep \
     call(63, x, fixed_arg0, fixed_arg1)
 
+// for lowercasing the 54L and 54H series names
+#define NRF_SERIES_LOWERCASE_52         52
+#define NRF_SERIES_LOWERCASE_53         53
+#define NRF_SERIES_LOWERCASE_54L        54l
+#define NRF_SERIES_LOWERCASE_54H        54h
+#define NRF_SERIES_LOWERCASE_71         71
+#define NRF_SERIES_LOWERCASE_91         91
+#define NRF_SERIES_LOWERCASE_92         92
+#define NRF_SERIES_LOWERCASE(series)    NRFX_CONCAT_2(NRF_SERIES_LOWERCASE_, series)
+
 #endif /* NRFX_UTILS_INTERNAL_H__ */

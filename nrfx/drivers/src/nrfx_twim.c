@@ -85,11 +85,14 @@
 #define TWIM_LENGTH_VALIDATE(drv_inst_idx, len1, len2)    \
         (NRFX_FOREACH_ENABLED(TWIM, TWIMX_LENGTH_VALIDATE, (||), (0), drv_inst_idx, len1, len2))
 
-#if NRFX_CHECK(NRFX_TWIM_NRF52_ANOMALY_219_WORKAROUND_ENABLED) || \
-    NRFX_CHECK(NRFX_TWIM_NRF53_ANOMALY_47_WORKAROUND_ENABLED)
-#define USE_WORKAROUND_FOR_TWIM_FREQ_ANOMALY 1
-#else
-#define USE_WORKAROUND_FOR_TWIM_FREQ_ANOMALY 0
+#if NRFX_CHECK(NRFX_TWIM_NRF52_ANOMALY_219_WORKAROUND_ENABLED)
+#undef NRF52_ERRATA_219_ENABLE_WORKAROUND
+#define NRF52_ERRATA_219_ENABLE_WORKAROUND 1
+#endif
+
+#if NRFX_CHECK(NRFX_TWIM_NRF53_ANOMALY_47_WORKAROUND_ENABLED)
+#undef NRF53_ERRATA_47_ENABLE_WORKAROUND
+#define NRF53_ERRATA_47_ENABLE_WORKAROUND 1
 #endif
 
 // Control block - driver instance local data.
@@ -109,7 +112,7 @@ typedef struct
     bool                    repeated;
     bool                    hold_bus_uninit;
     bool                    skip_gpio_cfg;
-#if NRFX_CHECK(NRFX_TWIM_NRF52_ANOMALY_109_WORKAROUND_ENABLED)
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
     nrf_twim_frequency_t    bus_frequency;
 #endif
 } twim_control_block_t;
@@ -206,11 +209,11 @@ static void twim_configure(nrfx_twim_t const *        p_instance,
         .skip_psel_cfg = p_config->skip_psel_cfg
     };
 
-#if USE_WORKAROUND_FOR_TWIM_FREQ_ANOMALY
-    if ((nrf52_errata_219() || nrf53_errata_47()) &&
+#if NRF_ERRATA_STATIC_CHECK(52, 219) || NRF_ERRATA_STATIC_CHECK(53, 47)
+    if ((NRF_ERRATA_DYNAMIC_CHECK(52, 219) || NRF_ERRATA_DYNAMIC_CHECK(53, 47)) &&
         (p_config->frequency == NRF_TWIM_FREQ_400K))
     {
-        nrfy_config.frequency = (nrf_twim_frequency_t)0x06200000UL;
+        nrfy_config.frequency = (nrf_twim_frequency_t) 0x06200000UL; // 390 kbps
     }
 #endif
 
@@ -331,9 +334,12 @@ nrfx_err_t nrfx_twim_init(nrfx_twim_t const *        p_instance,
         }
 
         p_cb->hold_bus_uninit = p_config->hold_bus_uninit;
-        #if NRFX_CHECK(NRFX_TWIM_NRF52_ANOMALY_109_WORKAROUND_ENABLED)
-        p_cb->bus_frequency   = (nrf_twim_frequency_t)p_config->frequency;
-        #endif
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
+        if (NRF_ERRATA_DYNAMIC_CHECK(52, 109))
+        {
+            p_cb->bus_frequency = (nrf_twim_frequency_t)p_config->frequency;
+        }
+#endif
 
         twim_configure(p_instance, p_config);
     }
@@ -636,26 +642,28 @@ static nrfx_err_t twim_xfer(twim_control_block_t        * p_cb,
         p_cb->int_mask |= NRF_TWIM_INT_ERROR_MASK;
         nrfy_twim_int_enable(p_twim, p_cb->int_mask);
 
-#if NRFX_CHECK(NRFX_TWIM_NRF52_ANOMALY_109_WORKAROUND_ENABLED)
-        if ((flags & NRFX_TWIM_FLAG_HOLD_XFER) && (p_xfer_desc->type != NRFX_TWIM_XFER_RX))
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
+        if (NRF_ERRATA_DYNAMIC_CHECK(52, 109))
         {
-            nrfy_twim_tx_list_set(p_twim, false);
-            nrfy_twim_rx_list_set(p_twim, false);
-            p_twim->FREQUENCY = 0;
-            nrfy_twim_event_clear(p_twim, NRF_TWIM_EVENT_TXSTARTED);
-            nrfy_twim_int_enable(p_twim, NRF_TWIM_INT_TXSTARTED_MASK);
-        }
-        else
-        {
-#if USE_WORKAROUND_FOR_TWIM_FREQ_ANOMALY
-            if (nrf52_errata_219() && p_cb->bus_frequency == NRF_TWIM_FREQ_400K)
+            if ((flags & NRFX_TWIM_FLAG_HOLD_XFER) && (p_xfer_desc->type != NRFX_TWIM_XFER_RX))
             {
-                nrfy_twim_frequency_set(p_twim, 0x06200000UL);
+                nrfy_twim_tx_list_set(p_twim, false);
+                nrfy_twim_rx_list_set(p_twim, false);
+                p_twim->FREQUENCY = 0;
+                nrfy_twim_event_clear(p_twim, NRF_TWIM_EVENT_TXSTARTED);
+                nrfy_twim_int_enable(p_twim, NRF_TWIM_INT_TXSTARTED_MASK);
             }
             else
-#endif
             {
-                nrfy_twim_frequency_set(p_twim, p_cb->bus_frequency);
+                nrf_twim_frequency_t new_frequency = p_cb->bus_frequency;
+#if NRF_ERRATA_STATIC_CHECK(52, 219) || NRF_ERRATA_STATIC_CHECK(53, 47)
+                if ((NRF_ERRATA_DYNAMIC_CHECK(52, 219) || NRF_ERRATA_DYNAMIC_CHECK(53, 47)) &&
+                    (p_cb->bus_frequency == NRF_TWIM_FREQ_400K))
+                {
+                    new_frequency = (nrf_twim_frequency_t) 0x06200000UL; // 390 kbps
+                }
+#endif
+                nrfy_twim_frequency_set(p_twim, new_frequency);
             }
         }
 #endif
@@ -740,8 +748,9 @@ static void irq_handler(NRF_TWIM_Type * p_twim, twim_control_block_t * p_cb)
     nrfy_twim_xfer_desc_t * p_xfer = p_cb->xfer_type == NRFX_TWIM_XFER_RX ?
                                                         &p_cb->xfer_desc_primary :
                                                         &p_cb->xfer_desc_secondary;
-#if NRFX_CHECK(NRFX_TWIM_NRF52_ANOMALY_109_WORKAROUND_ENABLED)
-    if (nrfy_twim_events_process(p_twim,
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 109) &&
+        nrfy_twim_events_process(p_twim,
                                  NRFY_EVENT_TO_INT_BITMASK(NRF_TWIM_EVENT_TXSTARTED),
                                  NULL))
     {
@@ -753,10 +762,11 @@ static void irq_handler(NRF_TWIM_Type * p_twim, twim_control_block_t * p_cb)
             nrfy_twim_enable(p_twim);
 
             // Set proper frequency.
-#if USE_WORKAROUND_FOR_TWIM_FREQ_ANOMALY
-            if (nrf52_errata_219() && p_cb->bus_frequency == NRF_TWIM_FREQ_400K)
+#if NRF_ERRATA_STATIC_CHECK(52, 219) || NRF_ERRATA_STATIC_CHECK(53, 47)
+            if ((NRF_ERRATA_DYNAMIC_CHECK(52, 219) || NRF_ERRATA_DYNAMIC_CHECK(53, 47)) &&
+                (p_cb->bus_frequency == NRF_TWIM_FREQ_400K))
             {
-                nrfy_twim_frequency_set(p_twim, 0x06200000UL);
+                nrfy_twim_frequency_set(p_twim, (nrf_twim_frequency_t) 0x06200000UL); // 390 kbps
             }
             else
 #endif
@@ -840,9 +850,8 @@ static void irq_handler(NRF_TWIM_Type * p_twim, twim_control_block_t * p_cb)
             event.xfer_desc.p_secondary_buf  = p_cb->xfer_desc_secondary.p_buffer;
             event.xfer_desc.secondary_length = p_cb->xfer_desc_secondary.length;
         }
-
-#if NRFX_CHECK(NRFX_TWIM_NRF52_ANOMALY_109_WORKAROUND_ENABLED)
-        else if (p_cb->xfer_type != NRFX_TWIM_XFER_RX)
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
+        else if (NRF_ERRATA_DYNAMIC_CHECK(52, 109) && (p_cb->xfer_type != NRFX_TWIM_XFER_RX))
         {
             /* Add Anomaly 109 workaround for each potential repeated transfer starting from TX. */
             nrfy_twim_tx_list_set(p_twim, false);

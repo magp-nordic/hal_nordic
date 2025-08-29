@@ -57,9 +57,15 @@
 #define SPIS_LENGTH_VALIDATE(drv_inst_idx, rx_len, tx_len)    \
         (NRFX_FOREACH_ENABLED(SPIS, SPISX_LENGTH_VALIDATE, (||), (0), drv_inst_idx, rx_len, tx_len))
 
-#if NRFX_CHECK(NRFX_SPIS_NRF52_ANOMALY_109_WORKAROUND_ENABLED)
+#if defined(NRFX_SPIS_NRF52_ANOMALY_109_WORKAROUND_ENABLED)
+// Enable workaround for nRF52 Series anomaly 109
+// DMA transfers might be corrupted.
+#undef NRF52_ERRATA_109_ENABLE_WORKAROUND
+#define NRF52_ERRATA_109_ENABLE_WORKAROUND NRFX_SPIS_NRF52_ANOMALY_109_WORKAROUND_ENABLED
+#endif
+
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
 #include <nrfx_gpiote.h>
-#define USE_DMA_ISSUE_WORKAROUND
 // This handler is called by the GPIOTE driver when a falling edge is detected
 // on the CSN line. There is no need to do anything here. The handling of the
 // interrupt itself provides a protection for DMA transfers.
@@ -98,7 +104,7 @@ typedef struct
     volatile nrfx_spis_state_t spi_state;       //!< SPI slave state.
     void *                     p_context;       //!< Context set on initialization.
     bool                       skip_gpio_cfg;
-#if defined(USE_DMA_ISSUE_WORKAROUND)
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
     uint32_t                   csn_pin;
     uint8_t                    gpiote_ch;
 #endif
@@ -172,63 +178,66 @@ static bool spis_configure(nrfx_spis_t const *        p_instance,
                           p_config->csn_pin);
     }
 
-#if defined(USE_DMA_ISSUE_WORKAROUND)
-    spis_cb_t * p_cb = &m_cb[p_instance->drv_inst_idx];
-
-    // If the GPIOTE channel was already used with a CSN pin, deinitialize it
-    // first as that pin number may be different now.
-    if (p_cb->csn_pin != NRF_SPIS_PIN_NOT_CONNECTED)
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 109))
     {
+        spis_cb_t * p_cb = &m_cb[p_instance->drv_inst_idx];
+
+        // If the GPIOTE channel was already used with a CSN pin, deinitialize it
+        // first as that pin number may be different now.
+        if (p_cb->csn_pin != NRF_SPIS_PIN_NOT_CONNECTED)
+        {
 #if NRFX_API_VER_AT_LEAST(3, 2, 0)
-        nrfx_gpiote_pin_uninit(&gpiote, p_cb->csn_pin);
+            nrfx_gpiote_pin_uninit(&gpiote, p_cb->csn_pin);
 #else
-        nrfx_gpiote_pin_uninit(p_cb->csn_pin);
+            nrfx_gpiote_pin_uninit(p_cb->csn_pin);
 #endif
-        p_cb->csn_pin = NRF_SPIS_PIN_NOT_CONNECTED;
+            p_cb->csn_pin = NRF_SPIS_PIN_NOT_CONNECTED;
+        }
+
+        // Get the CSN pin number from the PSEL register in the peripheral
+        // as in p_config that pin number may be omitted.
+        uint32_t csn_pin = nrf_spis_csn_pin_get(p_spis);
+
+        // Configure a GPIOTE channel to generate interrupts on each falling edge
+        // on the CSN line. Handling of these interrupts will make the CPU active
+        // and thus will protect the DMA transfers started by SPIS right after it
+        // is selected for communication.
+        nrfx_gpiote_trigger_config_t trig_config = {
+            .trigger = NRFX_GPIOTE_TRIGGER_HITOLO,
+            .p_in_channel = &p_cb->gpiote_ch
+        };
+        nrfx_gpiote_handler_config_t hndl_config = {
+            .handler = csn_event_handler
+        };
+
+#if NRFX_API_VER_AT_LEAST(3, 2, 0)
+        nrfx_gpiote_input_pin_config_t config = {
+            .p_pull_config    = NULL,
+            .p_trigger_config = &trig_config,
+            .p_handler_config = &hndl_config
+        };
+        nrfx_err_t err_code = nrfx_gpiote_input_configure(&gpiote, csn_pin, &config);
+#else
+        nrfx_err_t err_code = nrfx_gpiote_input_configure(csn_pin, NULL, &trig_config, &hndl_config);
+#endif
+        if (err_code != NRFX_SUCCESS)
+        {
+            NRFX_LOG_ERROR("Function: %s, error code: %s.",
+                           __func__,
+                           NRFX_LOG_ERROR_STRING_GET(err_code));
+            return false;
+        }
+
+#if NRFX_API_VER_AT_LEAST(3, 2, 0)
+        nrfx_gpiote_trigger_enable(&gpiote, csn_pin, true);
+#else
+        nrfx_gpiote_trigger_enable(csn_pin, true);
+#endif
+
+        p_cb->csn_pin = csn_pin;
     }
-
-    // Get the CSN pin number from the PSEL register in the peripheral
-    // as in p_config that pin number may be omitted.
-    uint32_t csn_pin = nrf_spis_csn_pin_get(p_spis);
-
-    // Configure a GPIOTE channel to generate interrupts on each falling edge
-    // on the CSN line. Handling of these interrupts will make the CPU active
-    // and thus will protect the DMA transfers started by SPIS right after it
-    // is selected for communication.
-    nrfx_gpiote_trigger_config_t trig_config = {
-        .trigger = NRFX_GPIOTE_TRIGGER_HITOLO,
-        .p_in_channel = &p_cb->gpiote_ch
-    };
-    nrfx_gpiote_handler_config_t hndl_config = {
-        .handler = csn_event_handler
-    };
-
-#if NRFX_API_VER_AT_LEAST(3, 2, 0)
-    nrfx_gpiote_input_pin_config_t config = {
-        .p_pull_config    = NULL,
-        .p_trigger_config = &trig_config,
-        .p_handler_config = &hndl_config
-    };
-    nrfx_err_t err_code = nrfx_gpiote_input_configure(&gpiote, csn_pin, &config);
-#else
-    nrfx_err_t err_code = nrfx_gpiote_input_configure(csn_pin, NULL, &trig_config, &hndl_config);
-#endif
-    if (err_code != NRFX_SUCCESS)
-    {
-        NRFX_LOG_ERROR("Function: %s, error code: %s.",
-                       __func__,
-                       NRFX_LOG_ERROR_STRING_GET(err_code));
-        return false;
-    }
-
-#if NRFX_API_VER_AT_LEAST(3, 2, 0)
-    nrfx_gpiote_trigger_enable(&gpiote, csn_pin, true);
-#else
-    nrfx_gpiote_trigger_enable(csn_pin, true);
-#endif
-
-    p_cb->csn_pin = csn_pin;
-#endif
+#endif // NRF_ERRATA_STATIC_CHECK(52, 109)
 
     // Configure SPI mode.
     nrf_spis_configure(p_spis, p_config->mode, p_config->bit_order);
@@ -294,31 +303,34 @@ nrfx_err_t nrfx_spis_init(nrfx_spis_t const *        p_instance,
     p_cb->handler   = event_handler;
     p_cb->p_context = p_context;
 
-#if defined(USE_DMA_ISSUE_WORKAROUND)
-    p_cb->csn_pin = NRF_SPIS_PIN_NOT_CONNECTED;
-
-    // Allocate a GPIOTE channel that will be used to handle the anomaly 109
-    // (the GPIOTE driver may be already initialized at this point, by this
-    // driver when another SPIS instance is used or by an application code,
-    // so just ignore the returned value here).
-#if NRFX_API_VER_AT_LEAST(3, 2, 0)
-    (void)nrfx_gpiote_init(&gpiote, NRFX_GPIOTE_DEFAULT_CONFIG_IRQ_PRIORITY);
-    err_code = nrfx_gpiote_channel_alloc(&gpiote, &p_cb->gpiote_ch);
-#else
-    (void)nrfx_gpiote_init(NRFX_GPIOTE_DEFAULT_CONFIG_IRQ_PRIORITY);
-    err_code = nrfx_gpiote_channel_alloc(&p_cb->gpiote_ch);
-#endif
-
-    if (err_code != NRFX_SUCCESS)
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 109))
     {
-#if NRFX_CHECK(NRFX_PRS_ENABLED)
-        nrfx_prs_release(p_spis);
+        p_cb->csn_pin = NRF_SPIS_PIN_NOT_CONNECTED;
+
+        // Allocate a GPIOTE channel that will be used to handle the anomaly 109
+        // (the GPIOTE driver may be already initialized at this point, by this
+        // driver when another SPIS instance is used or by an application code,
+        // so just ignore the returned value here).
+#if NRFX_API_VER_AT_LEAST(3, 2, 0)
+        (void)nrfx_gpiote_init(&gpiote, NRFX_GPIOTE_DEFAULT_CONFIG_IRQ_PRIORITY);
+        err_code = nrfx_gpiote_channel_alloc(&gpiote, &p_cb->gpiote_ch);
+#else
+        (void)nrfx_gpiote_init(NRFX_GPIOTE_DEFAULT_CONFIG_IRQ_PRIORITY);
+        err_code = nrfx_gpiote_channel_alloc(&p_cb->gpiote_ch);
 #endif
-        err_code = NRFX_ERROR_INTERNAL;
-        NRFX_LOG_ERROR("Function: %s, error code: %s.",
-                        __func__,
-                        NRFX_LOG_ERROR_STRING_GET(err_code));
-        return err_code;
+
+        if (err_code != NRFX_SUCCESS)
+        {
+#if NRFX_CHECK(NRFX_PRS_ENABLED)
+            nrfx_prs_release(p_spis);
+#endif
+            err_code = NRFX_ERROR_INTERNAL;
+            NRFX_LOG_ERROR("Function: %s, error code: %s.",
+                            __func__,
+                            NRFX_LOG_ERROR_STRING_GET(err_code));
+            return err_code;
+        }
     }
 #endif
 
@@ -328,12 +340,15 @@ nrfx_err_t nrfx_spis_init(nrfx_spis_t const *        p_instance,
 
         if (!spis_configure(p_instance, p_config))
         {
-#if defined(USE_DMA_ISSUE_WORKAROUND)
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
+            if (NRF_ERRATA_DYNAMIC_CHECK(52, 109))
+            {
 #if NRFX_API_VER_AT_LEAST(3, 2, 0)
-            nrfx_gpiote_channel_free(&gpiote, p_cb->gpiote_ch);
+                nrfx_gpiote_channel_free(&gpiote, p_cb->gpiote_ch);
 #else
-            nrfx_gpiote_channel_free(p_cb->gpiote_ch);
+                nrfx_gpiote_channel_free(p_cb->gpiote_ch);
 #endif
+            }
 #endif
             err_code = NRFX_ERROR_INVALID_PARAM;
             NRFX_LOG_WARNING("Function: %s, error code: %s.",
@@ -396,27 +411,34 @@ void nrfx_spis_uninit(nrfx_spis_t const * p_instance)
 
     NRF_SPIS_Type * p_spis = p_instance->p_reg;
 
-#if defined(USE_DMA_ISSUE_WORKAROUND)
-    if (p_cb->csn_pin != NRF_SPIS_PIN_NOT_CONNECTED)
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 109))
     {
+        if (p_cb->csn_pin != NRF_SPIS_PIN_NOT_CONNECTED)
+        {
 #if NRFX_API_VER_AT_LEAST(3, 2, 0)
-        nrfx_gpiote_pin_uninit(&gpiote, p_cb->csn_pin);
+            nrfx_gpiote_pin_uninit(&gpiote, p_cb->csn_pin);
 #else
-        nrfx_gpiote_pin_uninit(p_cb->csn_pin);
+            nrfx_gpiote_pin_uninit(p_cb->csn_pin);
+#endif
+        }
+#if NRFX_API_VER_AT_LEAST(3, 2, 0)
+        nrfx_gpiote_channel_free(&gpiote, p_cb->gpiote_ch);
+#else
+        nrfx_gpiote_channel_free(p_cb->gpiote_ch);
 #endif
     }
-#if NRFX_API_VER_AT_LEAST(3, 2, 0)
-    nrfx_gpiote_channel_free(&gpiote, p_cb->gpiote_ch);
-#else
-    nrfx_gpiote_channel_free(p_cb->gpiote_ch);
-#endif
 #endif
 
-    #define DISABLE_ALL 0xFFFFFFFF
     nrf_spis_disable(p_spis);
     NRFX_IRQ_DISABLE(nrfx_get_irq_number(p_instance->p_reg));
-    nrf_spis_int_disable(p_spis, DISABLE_ALL);
-    #undef  DISABLE_ALL
+    nrf_spis_int_disable(p_spis, UINT32_MAX);
+
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 214))
+    {
+        *(volatile uint32_t *)(p_spis + 0xA4ul) = 1UL;
+        *(volatile uint32_t *)(p_spis + 0xACul) = 1UL;
+    }
 
     if (!p_cb->skip_gpio_cfg)
     {

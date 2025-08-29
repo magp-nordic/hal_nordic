@@ -38,7 +38,6 @@
 #include <nrfx_qspi.h>
 #include <hal/nrf_clock.h>
 #include <hal/nrf_gpio.h>
-#include <nrf_erratas.h>
 
 #define NRFX_LOG_MODULE QSPI
 #include <nrfx_log.h>
@@ -75,9 +74,11 @@
                                          NRF_GPIO_PIN_H0H1,             \
                                          NRF_GPIO_PIN_NOSENSE)
 
-#if !defined(USE_WORKAROUND_FOR_ANOMALY_121) && defined(NRF53_SERIES)
-    // ANOMALY 121 - Configuration of QSPI peripheral requires additional steps.
-    #define USE_WORKAROUND_FOR_ANOMALY_121 1
+#if defined(USE_WORKAROUND_FOR_ANOMALY_121)
+// Enable workaround for nRF52 Series anomaly 121
+// Configuration of QSPI peripheral requires additional steps.
+#undef NRF53_ERRATA_121_ENABLE_WORKAROUND
+#define NRF53_ERRATA_121_ENABLE_WORKAROUND USE_WORKAROUND_FOR_ANOMALY_121
 #endif
 
 /** @brief QSPI driver states.*/
@@ -317,7 +318,7 @@ static nrfx_err_t qspi_configure(nrfx_qspi_config_t const * p_config)
      * may trigger anomaly 215 on nRF52840 or anomaly 43 on nRF5340. Use
      * the proper workaround then.
      */
-    if (NRF52_ERRATA_215_ENABLE_WORKAROUND || NRF53_ERRATA_43_ENABLE_WORKAROUND)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 215) || NRF_ERRATA_DYNAMIC_CHECK(53, 43))
     {
         /* The interrupt is disabled because of the anomaly handling.
          * It will be reenabled if needed before the next QSPI operation.
@@ -329,20 +330,21 @@ static nrfx_err_t qspi_configure(nrfx_qspi_config_t const * p_config)
     nrf_qspi_xip_offset_set(NRF_QSPI, p_config->xip_offset);
 
     nrf_qspi_ifconfig0_set(NRF_QSPI, &p_config->prot_if);
-#if NRFX_CHECK(USE_WORKAROUND_FOR_ANOMALY_121)
-    uint32_t regval = nrf_qspi_ifconfig0_raw_get(NRF_QSPI);
-    if (p_config->phy_if.sck_freq == NRF_QSPI_FREQ_DIV1)
+    if (NRF_ERRATA_DYNAMIC_CHECK(53, 121))
     {
-        regval |= ((1UL << 16) | (1UL << 17));
+        uint32_t regval = nrf_qspi_ifconfig0_raw_get(NRF_QSPI);
+        if (p_config->phy_if.sck_freq == NRF_QSPI_FREQ_DIV1)
+        {
+            regval |= ((1UL << 16) | (1UL << 17));
+        }
+        else
+        {
+            regval &= ~(1UL << 17);
+            regval |=  (1UL << 16);
+        }
+        nrf_qspi_ifconfig0_raw_set(NRF_QSPI, regval);
+        nrf_qspi_iftiming_set(NRF_QSPI, 6);
     }
-    else
-    {
-        regval &= ~(1UL << 17);
-        regval |=  (1UL << 16);
-    }
-    nrf_qspi_ifconfig0_raw_set(NRF_QSPI, regval);
-    nrf_qspi_iftiming_set(NRF_QSPI, 6);
-#endif
     nrf_qspi_ifconfig1_set(NRF_QSPI, &p_config->phy_if);
 
     if (m_cb.handler)
@@ -390,9 +392,10 @@ static void qspi_deactivate(void)
 
 static bool qspi_errata_159_conditions_check(void)
 {
-#if NRF_CLOCK_HAS_HFCLK192M && NRF53_ERRATA_159_ENABLE_WORKAROUND
-    if ((nrf_clock_hfclk192m_div_get(NRF_CLOCK) != NRF_CLOCK_HFCLK_DIV_1) ||
-        (nrf_clock_hfclk_div_get(NRF_CLOCK) != NRF_CLOCK_HFCLK_DIV_2))
+#if NRF_CLOCK_HAS_HFCLK192M
+    if (NRF_ERRATA_DYNAMIC_CHECK(53, 159) &&
+        ((nrf_clock_hfclk192m_div_get(NRF_CLOCK) != NRF_CLOCK_HFCLK_DIV_1) ||
+         (nrf_clock_hfclk_div_get(NRF_CLOCK) != NRF_CLOCK_HFCLK_DIV_2)))
     {
         return true;
     }
@@ -540,7 +543,7 @@ nrfx_err_t nrfx_qspi_cinstr_xfer(nrf_qspi_cinstr_conf_t const * p_config,
      * anomaly 215 on nRF52840 or anomaly 43 on nRF5340. Use the proper
      * workaround then.
      */
-    if (NRF52_ERRATA_215_ENABLE_WORKAROUND || NRF53_ERRATA_43_ENABLE_WORKAROUND)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 215) || NRF_ERRATA_DYNAMIC_CHECK(53, 43))
     {
         qspi_workaround_215_43_apply();
     }
@@ -618,7 +621,7 @@ nrfx_err_t nrfx_qspi_lfm_start(nrf_qspi_cinstr_conf_t const * p_config)
      * anomaly 215 on nRF52840 or anomaly 43 on nRF5340. Use the proper
      * workaround then.
      */
-    if (NRF52_ERRATA_215_ENABLE_WORKAROUND || NRF53_ERRATA_43_ENABLE_WORKAROUND)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 215) || NRF_ERRATA_DYNAMIC_CHECK(53, 43))
     {
         qspi_workaround_215_43_apply();
     }

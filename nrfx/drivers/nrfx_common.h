@@ -40,11 +40,10 @@
 #include <string.h>
 #include <limits.h>
 
-#include <nrf.h>
+#include <nrfx_bsp.h>
 #include "nrfx_utils.h"
 #include <nrf_peripherals.h>
 #include <nrf_mem.h>
-#include "nrfx_ext.h"
 
 #ifdef __cplusplus
 extern "C" {

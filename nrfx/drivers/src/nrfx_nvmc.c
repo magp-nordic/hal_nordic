@@ -238,7 +238,7 @@ static void nvmc_erase_mode_set(void)
 
 static void nvmc_word_write(uint32_t addr, uint32_t value)
 {
-#if defined(NRF91_SERIES)
+#if NRF_NVMC_HAS_WRITE_READY_CHECK && (!NRF_ERRATA_STATIC_CHECK(52, 233))
     while (!nrf_nvmc_write_ready_check(NRF_NVMC))
     {}
 #else

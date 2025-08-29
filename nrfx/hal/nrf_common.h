@@ -34,6 +34,8 @@
 #ifndef NRF_COMMON_H__
 #define NRF_COMMON_H__
 
+#include <nrf_erratas.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -212,6 +214,25 @@ NRF_STATIC_INLINE uint8_t nrf_address_slave_get(uint32_t addr);
 #if defined(ADDRESS_PERIPHID_Msk)
 NRF_STATIC_INLINE uint16_t nrf_address_periphid_get(uint32_t addr);
 #endif
+
+/**
+ * @brief Macro for statically checking errata susceptibility.
+ *        It determines if the fix should be compiled in (and later dynamically checked) or not.
+ */
+#define NRF_ERRATA_STATIC_CHECK(series, erratum)   \
+    (NRFX_CHECK(NRF##series##_ERRATA_##erratum##_ENABLE_WORKAROUND))
+
+/**
+ * @brief Macro for dynamically checking errata susceptibility.
+ *        In addition to checking compilation-time defines, it reads the chip's hardware revision
+ *        at runtime to determine if this specific version is affected or not.
+ *
+ * @note  This macro does a static check first, so the compiler can optimize unused code out.
+ *        Only when static check returns true, a dynamic check call is made.
+ */
+#define NRF_ERRATA_DYNAMIC_CHECK(series, erratum)  \
+    (NRF_ERRATA_STATIC_CHECK(series, erratum) &&   \
+     NRFX_CONCAT_3(nrf, NRF_SERIES_LOWERCASE(series), _errata_##erratum()))
 
 #ifndef NRF_DECLARE_ONLY
 

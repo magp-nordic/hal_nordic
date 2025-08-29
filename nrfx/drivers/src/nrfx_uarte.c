@@ -257,7 +257,10 @@ static void uarte_configure(nrfx_uarte_t        const * p_instance,
 
     nrfy_uarte_periph_configure(p_instance->p_reg, &nrfy_config);
 
-    apply_workaround_for_enable_anomaly(p_instance);
+    if (NRF_ERRATA_DYNAMIC_CHECK(53, 44) || NRF_ERRATA_DYNAMIC_CHECK(91, 23))
+    {
+        apply_workaround_for_enable_anomaly(p_instance);
+    }
 
     nrfy_uarte_int_init(p_instance->p_reg,
                         NRFY_EVENT_TO_INT_BITMASK(NRF_UARTE_EVENT_ENDRX) |
@@ -317,10 +320,6 @@ static void pins_to_default(nrfx_uarte_t const * p_instance)
 
 static void apply_workaround_for_enable_anomaly(nrfx_uarte_t const * p_instance)
 {
-#if defined(NRF53_SERIES) || defined(NRF91_SERIES)
-    // Apply workaround for anomalies:
-    // - nRF91 - anomaly 23
-    // - nRF53 - anomaly 44
     volatile uint32_t const * rxenable_reg =
         (volatile uint32_t *)(((uint32_t)p_instance->p_reg) + 0x564);
     volatile uint32_t const * txenable_reg =
@@ -350,9 +349,6 @@ static void apply_workaround_for_enable_anomaly(nrfx_uarte_t const * p_instance)
         (void)nrfy_uarte_errorsrc_get_and_clear(p_instance->p_reg);
         nrfy_uarte_disable(p_instance->p_reg);
     }
-#else
-    (void)(p_instance);
-#endif // defined(NRF53_SERIES) || defined(NRF91_SERIES)
 }
 
 static uint32_t uarte_int_lock(NRF_UARTE_Type * p_uarte)

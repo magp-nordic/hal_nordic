@@ -61,10 +61,6 @@ extern "C" {
 #define GPIO_PIN_CNF_DRIVE1_OFFSET (GPIO_PIN_CNF_DRIVE1_Pos - GPIO_PIN_CNF_DRIVE0_Pos)
 #endif
 
-#if defined(NRF52820_XXAA)
-#include <nrf_erratas.h>
-#endif
-
 /*
  * Macro for generating case code blocks that return token NRF_<periph_name><prefix><i>
  * for case value equal to <i>.
@@ -1486,6 +1482,14 @@ NRF_STATIC_INLINE void nrf_gpio_latches_read_and_clear(uint32_t   start_port,
 
         p_masks++;
     }
+
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 173) || NRF_ERRATA_DYNAMIC_CHECK(53, 119))
+    {
+        for (i = start_port; i < (start_port + length); i++)
+        {
+            (void)gpio_regs[i]->LATCH;
+        }
+    }
 }
 
 NRF_STATIC_INLINE uint32_t nrf_gpio_pin_latch_get(uint32_t pin_number)
@@ -1501,6 +1505,14 @@ NRF_STATIC_INLINE void nrf_gpio_pin_latch_clear(uint32_t pin_number)
     NRF_GPIO_Type * reg = nrf_gpio_pin_port_decode(&pin_number);
 
     reg->LATCH = (1 << pin_number);
+
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 173) || NRF_ERRATA_DYNAMIC_CHECK(53, 119))
+    {
+        for (uint8_t i = 0; i < 4; i++)
+        {
+            (void)reg->LATCH;
+        }
+    }
 }
 #endif // defined(NRF_GPIO_LATCH_PRESENT)
 

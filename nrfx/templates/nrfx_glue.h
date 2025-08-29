@@ -55,7 +55,7 @@ extern "C" {
 
 // Uncomment this line to use the standard MDK way of binding IRQ handlers
 // at linking time.
-//#include <soc/nrfx_irqs.h>
+// #include NRFX_BSP_SOC_IRQS_PATH
 
 //------------------------------------------------------------------------------
 

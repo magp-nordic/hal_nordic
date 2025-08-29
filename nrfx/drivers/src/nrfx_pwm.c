@@ -45,7 +45,14 @@
 #define NRFX_LOG_MODULE PWM
 #include <nrfx_log.h>
 
-#if NRFX_CHECK(NRFX_PWM_NRF52_ANOMALY_109_WORKAROUND_ENABLED)
+#if defined(NRFX_PWM_NRF52_ANOMALY_109_WORKAROUND_ENABLED)
+// Enable workaround for nRF52 Series anomaly 109
+// DMA transfers might be corrupted.
+#undef NRF52_ERRATA_109_ENABLE_WORKAROUND
+#define NRF52_ERRATA_109_ENABLE_WORKAROUND NRFX_PWM_NRF52_ANOMALY_109_WORKAROUND_ENABLED
+#endif
+
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
 // The workaround uses interrupts to wake up the CPU and ensure it is active
 // when PWM is about to start a DMA transfer. For initial transfer, done when
 // a playback is started via PPI, a specific EGU instance is used to generate
@@ -53,9 +60,6 @@
 // event of a preceding sequence is used to protect the transfer done for
 // the next sequence to be played.
 #include <hal/nrf_egu.h>
-#define USE_DMA_ISSUE_WORKAROUND
-#endif
-#if defined(USE_DMA_ISSUE_WORKAROUND)
 #define EGU_IRQn(i)         EGU_IRQn_(i)
 #define EGU_IRQn_(i)        SWI##i##_EGU##i##_IRQn
 #define EGU_IRQHandler(i)   EGU_IRQHandler_(i)
@@ -69,7 +73,7 @@
 // Control block - driver instance local data.
 typedef struct
 {
-#if defined(USE_DMA_ISSUE_WORKAROUND)
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
     uint32_t                  starting_task_address;
 #endif
     nrfx_pwm_handler_t        handler;
@@ -120,7 +124,7 @@ static void pins_deconfigure(nrfx_pwm_t const * p_instance)
     }
 }
 
-#if defined(USE_DMA_ISSUE_WORKAROUND)
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
 static void apply_errata_109(nrfx_pwm_config_t const * p_config)
 {
     /* The workaround for nRF52 Anomaly 109 "protects" DMA transfers by handling
@@ -169,8 +173,11 @@ static void pwm_configure(nrfx_pwm_t const * p_instance, nrfx_pwm_config_t const
     }
 #endif
 
-#if defined(USE_DMA_ISSUE_WORKAROUND)
-    apply_errata_109(p_config);
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 109))
+    {
+        apply_errata_109(p_config);
+    }
 #endif
 }
 
@@ -255,8 +262,11 @@ void nrfx_pwm_uninit(nrfx_pwm_t const * p_instance)
     NRFX_ASSERT(p_cb->state != NRFX_DRV_STATE_UNINITIALIZED);
 
     nrfy_pwm_int_uninit(p_instance->p_reg);
-#if defined(USE_DMA_ISSUE_WORKAROUND)
-    NRFY_IRQ_DISABLE(DMA_ISSUE_EGU_IRQn);
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
+    if (NRF_ERRATA_DYNAMIC_CHECK(52, 109))
+    {
+        NRFY_IRQ_DISABLE(DMA_ISSUE_EGU_IRQn);
+    }
 #endif
 
     nrfy_pwm_disable(p_instance->p_reg);
@@ -301,18 +311,21 @@ static uint32_t start_playback(nrfx_pwm_t const *    p_instance,
         // to generate interrupts.
         // However, the user handler is called for them only when requested
         // (see 'irq_handler').
-#if defined(USE_DMA_ISSUE_WORKAROUND)
-        int_mask |= NRF_PWM_INT_SEQEND0_MASK | NRF_PWM_INT_SEQEND1_MASK;
-#else
-        if (flags & NRFX_PWM_FLAG_SIGNAL_END_SEQ0)
+        if (NRF_ERRATA_DYNAMIC_CHECK(52, 109))
         {
-            int_mask |= NRF_PWM_INT_SEQEND0_MASK;
+            int_mask |= NRF_PWM_INT_SEQEND0_MASK | NRF_PWM_INT_SEQEND1_MASK;
         }
-        if (flags & NRFX_PWM_FLAG_SIGNAL_END_SEQ1)
+        else
         {
-            int_mask |= NRF_PWM_INT_SEQEND1_MASK;
+            if (flags & NRFX_PWM_FLAG_SIGNAL_END_SEQ0)
+            {
+                int_mask |= NRF_PWM_INT_SEQEND0_MASK;
+            }
+            if (flags & NRFX_PWM_FLAG_SIGNAL_END_SEQ1)
+            {
+                int_mask |= NRF_PWM_INT_SEQEND1_MASK;
+            }
         }
-#endif
         if (flags & NRFX_PWM_FLAG_NO_EVT_FINISHED)
         {
             int_mask &= (uint32_t)~NRF_PWM_INT_LOOPSDONE_MASK;
@@ -320,28 +333,32 @@ static uint32_t start_playback(nrfx_pwm_t const *    p_instance,
 
         nrfy_pwm_int_set(p_instance->p_reg, int_mask);
     }
-#if defined(USE_DMA_ISSUE_WORKAROUND)
-    else
+    else if (NRF_ERRATA_DYNAMIC_CHECK(52, 109))
     {
         nrfy_pwm_int_set(p_instance->p_reg,
             NRF_PWM_INT_SEQEND0_MASK | NRF_PWM_INT_SEQEND1_MASK);
     }
-#endif
     if (flags & NRFX_PWM_FLAG_START_VIA_TASK)
     {
         uint32_t starting_task_address =
             nrfy_pwm_task_address_get(p_instance->p_reg, nrfy_pwm_seqstart_task_get(seq_id));
 
-#if defined(USE_DMA_ISSUE_WORKAROUND)
-        // To "protect" the initial DMA transfer it is required to start
-        // the PWM by triggering the proper task from EGU interrupt handler,
-        // it is not safe to do it directly via PPI.
-        p_cb->starting_task_address = starting_task_address;
-        nrf_egu_int_enable(DMA_ISSUE_EGU, nrf_egu_channel_int_get(p_instance->instance_id));
-        return nrf_egu_task_address_get(DMA_ISSUE_EGU,
-                                        nrf_egu_trigger_task_get(p_instance->instance_id));
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
+        if (NRF_ERRATA_DYNAMIC_CHECK(52, 109))
+        {
+            // To "protect" the initial DMA transfer it is required to start
+            // the PWM by triggering the proper task from EGU interrupt handler,
+            // it is not safe to do it directly via PPI.
+            p_cb->starting_task_address = starting_task_address;
+            nrf_egu_int_enable(DMA_ISSUE_EGU, nrf_egu_channel_int_get(p_instance->instance_id));
+            return nrf_egu_task_address_get(DMA_ISSUE_EGU,
+                                            nrf_egu_trigger_task_get(p_instance->instance_id));
+        }
+        else
 #else
-        return starting_task_address;
+        {
+            return starting_task_address;
+        }
 #endif
     }
 
@@ -528,7 +545,7 @@ static void irq_handler(NRF_PWM_Type * p_pwm, pwm_control_block_t * p_cb)
     }
 }
 
-#if defined(USE_DMA_ISSUE_WORKAROUND)
+#if NRF_ERRATA_STATIC_CHECK(52, 109)
 // See 'start_playback' why this is needed.
 void DMA_ISSUE_EGU_IRQHandler(void)
 {
